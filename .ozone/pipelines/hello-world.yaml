@@ -2,8 +2,36 @@ apiVersion: tekton.dev/v1beta1
 kind: Pipeline
 metadata:
   name: hello-world-pipeline
+  namespace: default
 spec:
+  params:
+    - name: message
+      description: The message to print
+      type: string
+      default: "Hello, World!"
+    - name: repeatCount
+      description: Number of times to print the message
+      type: string
+      default: "1"
   tasks:
-    - name: hello-world
-      taskRef:
-        name: hello-world-task
+    - name: print-message
+      params:
+        - name: message
+          value: $(params.message)
+        - name: repeatCount
+          value: $(params.repeatCount)
+      taskSpec:
+        params:
+          - name: message
+            type: string
+            description: The message to print
+          - name: repeatCount
+            type: string
+            description: Number of times to print the message
+        steps:
+          - name: print-step
+            image: ubuntu
+            script: |
+              for i in $(seq 1 $(params.repeatCount)); do
+                echo "$(params.message)"
+              done

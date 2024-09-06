@@ -1,0 +1,60 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  annotations:
+    tekton.dev/categories: "Go"
+    tekton.dev/tags: "Go"
+    tekton.dev/displayName: "Golang Test Coverage"
+    ozone-in2tive-ai/security-reports: "present"
+  labels:
+    app.kubernetes.io/version: "0.1"
+  name: my-task-first
+spec:
+  description: This is a task that checks the minimum coverage of a golang application
+  params:
+    - name: MIN_COVERAGE
+      description: Minimum coverage that is expected of the application (eg - 80% would be input as 80)
+      type: string
+      default: "80"
+    - name: PROJECT_DIR
+      description: Directory path where the source code is present
+      type: string
+  results:
+    - description: The code coverage
+      name: CODE_COVERAGE
+      type: string
+  steps:
+    - image: golang:latest
+      name: run-tests-coverage
+      script: >
+        set +x
+
+        cd $(workspaces.source.path)/$(params.PROJECT_DIR)
+
+        go test -coverprofile=coverage.out ./...
+
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | cut -d'%' -f1)
+
+        go tool cover -html=coverage.out -o index.html
+
+        COVERAGE_INT=$(printf "%.0f" $COVERAGE)
+
+        MIN_COVERAGE_INT=$(printf "%.0f" $(params.MIN_COVERAGE))
+
+        echo -n $COVERAGE_INT | tee $(results.CODE_COVERAGE.path) > /dev/null
+
+        curl --location --request
+        PATCH  '$(OZONE_CP_INTERACTION_HOST)/taskapi/v1/pipelineruns/publish_reports'
+        -H"ReportToken: $(OZONE_CP_INTERACTION_TOKEN)"
+        --form  'file=@"index.html"' --form 'scan_name="golang-test"'
+
+        if [ $COVERAGE_INT -lt $MIN_COVERAGE_INT ]; then
+          printf "\nCode coverage (%d%%) is below the minimum required (%d%%).\n" "$COVERAGE_INT" "$(params.MIN_COVERAGE)"
+          exit 1
+        else
+          printf "\nCode coverage (%d%%) meets the minimum required (%d%%).\n" "$COVERAGE_INT" "$(params.MIN_COVERAGE)"
+        fi
+  workspaces:
+    - mountPath: /source
+      name: source
+      description: Directory where source code is present

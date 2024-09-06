@@ -1,0 +1,267 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: dora-git-docker-image-build-template-deploy-v-1
+  namespace: ozone
+spec:
+  params:
+    - description: |
+        Name of registry
+      name: REGISTRY_NAME
+      type: string
+    - description: |
+        Registry user
+      name: REGISTRY_USER
+      type: string
+    - description: |
+        Registry password
+      name: REGISTRY_PASSWORD
+      type: string
+    - description: |
+        Repository directory
+      name: PROJECT_DIR
+      type: string
+    - description: |
+        Repository user
+      name: REPO_USER
+      type: string
+    - description: |
+        Repository password
+      name: REPO_PASSWORD
+      type: string
+    - description: |
+        Repository url
+      name: REPO_URL
+      type: string
+    - description: |
+        Repo branch
+      name: REPO_BRANCH
+      type: string
+    - description: |
+        registry image name
+      name: REGISTRY_IMAGE
+      type: string
+    - description: |
+        image tag
+      name: IMAGE_TAG
+      type: string
+    - description: |
+        docker file path
+      name: DOCKER_FILE_PATH
+      type: string
+    - description: |
+        docker git param
+      name: DOCKER_NETRC
+      type: string
+    - description: YAML string to apply
+      name: YAML_STRING
+      type: string
+  results:
+    - description: The image tag of the build
+      name: IMAGE_TAG
+      value: $(tasks.ozone-image-build-task-v1.results.IMAGE_TAG)
+    - description: The container image url
+      name: IMAGE_URL
+      value: $(tasks.ozone-image-build-task-v1.results.IMAGE_URL)
+    - description: The latest commit hash
+      name: COMMIT_HASH
+      value: $(tasks.ozone-image-build-task-v1.results.COMMIT_HASH)
+    - description: The latest commit time
+      name: COMMIT_TIME
+      value: $(tasks.ozone-image-build-task-v1.results.COMMIT_TIME)
+  tasks:
+    - name: ozone-image-build-task-v1
+      params:
+        - name: REGISTRY_NAME
+          value: $(params.REGISTRY_NAME)
+        - name: REGISTRY_USER
+          value: $(params.REGISTRY_USER)
+        - name: REGISTRY_PASSWORD
+          value: $(params.REGISTRY_PASSWORD)
+        - name: PROJECT_DIR
+          value: $(params.PROJECT_DIR)
+        - name: REGISTRY_IMAGE
+          value: $(params.REGISTRY_IMAGE)
+        - name: IMAGE_TAG
+          value: $(params.IMAGE_TAG)
+        - name: DOCKER_FILE_PATH
+          value: $(params.DOCKER_FILE_PATH)
+        - name: DOCKER_NETRC
+          value: $(params.DOCKER_NETRC)
+        - name: REPO_USER
+          value: $(params.REPO_USER)
+        - name: REPO_PASSWORD
+          value: $(params.REPO_PASSWORD)
+        - name: REPO_URL
+          value: $(params.REPO_URL)
+        - name: REPO_BRANCH
+          value: $(params.REPO_BRANCH)
+      taskSpec:
+        params:
+          - description: |
+              Name of registry
+            name: REGISTRY_NAME
+            type: string
+          - description: |
+              Registry user
+            name: REGISTRY_USER
+            type: string
+          - description: |
+              Registry password
+            name: REGISTRY_PASSWORD
+            type: string
+          - description: |
+              Repository directory
+            name: PROJECT_DIR
+            type: string
+          - description: |
+              Repository user
+            name: REPO_USER
+            type: string
+          - description: |
+              Repository password
+            name: REPO_PASSWORD
+            type: string
+          - description: |
+              Repository url
+            name: REPO_URL
+            type: string
+          - description: |
+              Repo branch
+            name: REPO_BRANCH
+            type: string
+          - description: |
+              registry image name
+            name: REGISTRY_IMAGE
+            type: string
+          - description: |
+              image tag
+            name: IMAGE_TAG
+            type: string
+          - description: |
+              docker file path
+            name: DOCKER_FILE_PATH
+            type: string
+          - description: |
+              docker git param
+            name: DOCKER_NETRC
+            type: string
+        results:
+          - description: The image tag of the build
+            name: IMAGE_TAG
+          - description: The container image url
+            name: IMAGE_URL
+          - description: The latest commit hash
+            name: COMMIT_HASH
+          - description: The latest commit time
+            name: COMMIT_TIME
+        steps:
+          - image: "{{TEKTON_PUBLIC_REGISTRY_PREFIX}}/alpine/git:latest"
+            name: git-clone
+            script: >
+              set +x
+
+              rm -rf $(workspaces.gitpull.path)/$(params.PROJECT_DIR)
+
+              git clone -b $(params.REPO_BRANCH) --recursive
+              https://"$(params.REPO_USER)":"$(params.REPO_PASSWORD)"@"$(params.REPO_URL)"
+              $(workspaces.gitpull.path)/$(params.PROJECT_DIR)
+
+              cd $(workspaces.gitpull.path)/$(params.PROJECT_DIR)
+
+              git rev-parse HEAD | tee $(results.COMMIT_HASH.path)
+
+              epoch=`git log -1 --format=%ct`
+
+              human=`date -d @$epoch`
+
+              echo "epoch time: $epoch"
+
+              echo "human readable time: $human"
+
+              echo $epoch | tee $(results.COMMIT_TIME.path)
+          - image: "{{TEKTON_PUBLIC_REGISTRY_PREFIX}}/gcr.io/andromeda-288104/buildah/stabl\
+              e:v0.0.1"
+            name: buildah-build-and-push
+            script: >
+              set +x
+
+              sudo buildah --tls-verify=false --storage-driver=vfs login
+              --username '$(params.REGISTRY_USER)' --password
+              '$(params.REGISTRY_PASSWORD)' '$(params.REGISTRY_NAME)'
+
+              sudo buildah bud --format=docker --isolation=chroot --cap-add
+              SYS_ADMIN --build-arg "DOCKER_NETRC=$(params.DOCKER_NETRC)"
+              --storage-driver=vfs -f $(params.DOCKER_FILE_PATH) -t result-image
+              $(workspaces.gitpull.path)/$(params.PROJECT_DIR)
+
+              sudo buildah --tls-verify=false --storage-driver=vfs
+              push  localhost/result-image:latest
+              $(params.REGISTRY_IMAGE):$(params.IMAGE_TAG)
+
+              echo -n $(params.IMAGE_TAG) | tee $(results.IMAGE_TAG.path)
+
+              echo -n $(params.REGISTRY_IMAGE):$(params.IMAGE_TAG) | tee
+              $(results.IMAGE_URL.path)
+            securityContext:
+              privileged: true
+              runAsUser: 0
+        workspaces:
+          - description: Where git pulls
+            mountPath: /gitpull
+            name: gitpull
+      workspaces:
+        - name: gitpull
+          workspace: gitpull
+    - name: ozone-apply-yaml-string
+      params:
+        - name: YAML_STRING
+          value: $(params.YAML_STRING)
+        - name: IMAGE_TAG
+          value: $(params.IMAGE_TAG)
+        - name: COMMIT_HASH
+          value: $(tasks.ozone-image-build-task-v1.results.COMMIT_HASH)
+        - name: COMMIT_TIME
+          value: $(tasks.ozone-image-build-task-v1.results.COMMIT_TIME)
+      runAfter:
+        - ozone-image-build-task-v1
+      taskSpec:
+        params:
+          - description: YAML string to apply
+            name: YAML_STRING
+            type: string
+          - description: |
+              image tag
+            name: IMAGE_TAG
+            type: string
+          - description: latest commit hash
+            name: COMMIT_HASH
+            type: string
+          - description: latest commit time
+            name: COMMIT_TIME
+            type: string
+        steps:
+          - image: "{{TEKTON_PUBLIC_REGISTRY_PREFIX}}/lachlanevenson/k8s-kubectl:v1.18.17"
+            name: kubectl-apply
+            script: >
+              set +x
+
+
+              COMMIT_HASH=$(params.COMMIT_HASH)
+
+              echo "COMMIT_HASH: $COMMIT_HASH"
+
+
+              COMMIT_TIME=$(params.COMMIT_TIME)
+
+              echo "COMMIT_TIME: $COMMIT_TIME"
+
+
+              cat <<EOF | sed "s/COMMIT_HASH/$COMMIT_HASH/g" | sed
+              "s/COMMIT_TIME/$COMMIT_TIME/g" | kubectl apply -f -
+
+              $(params.YAML_STRING)
+
+              EOF
+  workspaces:
+    - name: gitpull
